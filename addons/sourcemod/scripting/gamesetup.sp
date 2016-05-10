@@ -17,7 +17,7 @@
 #define SHOW_MENU_TIME		30
 #define VOTE_OVERTIME_TIME	15
 
-#define PLUGIN_PREFIX " {lightblue}[finalrespawn]{default}"
+#define PLUGIN_PREFIX "[{green}Game Setup{default}]"
 
 public Plugin myinfo = {
 	name = "Game Setup",
@@ -27,12 +27,6 @@ public Plugin myinfo = {
 	url = "http://finalrespawn.com"
 };
 
-/* TODO */
-
-// 1. Sort out the help message
-// 2. Add a convar for prefix and show hud and others
-// 3. Make it execute a standard config before the custom
-
 /***********VARIABLES***********/
 
 Handle g_ReadyHud = null;
@@ -40,6 +34,7 @@ bool g_Knife;
 bool g_MatchCanClinch = true;
 bool g_Paused[3];
 bool g_Ready[MAXPLAYERS + 1];
+bool g_Recording;
 char g_ClanTag[MAXPLAYERS + 1][16];
 char g_Commands[16][16];
 char g_Maps[64][PLATFORM_MAX_PATH];
@@ -55,17 +50,21 @@ public void OnPluginStart()
 {
 	AddChatCommand(".menu", Command_Menu);
 	AddChatCommand(".ready", Command_Ready);
-	AddChatCommand(".clarkey", Command_Ready);
 	AddChatCommand(".r", Command_Ready);
 	AddChatCommand(".gaben", Command_Gaben);
 	AddChatCommand(".unready", Command_UnReady);
+	AddChatCommand(".ur", Command_UnReady);
 	AddChatCommand(".pause", Command_Pause);
+	AddChatCommand(".paws", Command_Pause);
 	AddChatCommand(".unpause", Command_UnPause);
+	AddChatCommand(".unpaws", Command_UnPause);
 	AddChatCommand(".stay", Command_Stay);
 	AddChatCommand(".swap", Command_Swap);
-	AddChatCommand(".switch", Command_Switch);
+	AddChatCommand(".switch", Command_Swap);
 	AddChatCommand(".endgame", Command_EndGame);
+	AddChatCommand(".gg", Command_EndGame);
 	AddChatCommand(".help", Command_Help);
+	AddChatCommand(".commands", Command_Help);
 	
 	HookEvent("round_start", Event_RoundStart);
 	HookEvent("round_end", Event_RoundEnd);
@@ -74,10 +73,15 @@ public void OnPluginStart()
 	//Clan tag events
 	HookEvent("player_team", Event_ClanTag, EventHookMode_Post);
 	HookEvent("player_spawn", Event_ClanTag, EventHookMode_Post);
+	
+	LoadTranslations("gamesetup.phrases");
 }
 
-public void OnMapStart()
+public void OnMapEnd()
 {
+	g_Mode = MODE_WARMUP;
+	g_Recording = false;
+	
 	for (int i = 1; i <= MaxClients; i++)
 	{
 		if (IsClientInGame(i) && !IsFakeClient(i))
@@ -112,7 +116,7 @@ public Action Command_Ready(int client, int args)
 	{
 		if (g_Ready[client])
 		{
-			CPrintToChat(client, "%s You are already ready!", PLUGIN_PREFIX);
+			CPrintToChat(client, "%t", "Already Ready");
 		}
 		else
 		{
@@ -144,7 +148,7 @@ public Action Command_Ready(int client, int args)
 
 public Action Command_Gaben(int client, int args)
 {
-	CPrintToChat(client, "%s Gaben has heard your prayer. His luck will be with you this game!", PLUGIN_PREFIX);
+	CPrintToChat(client, "%t", "Gaben");
 	FakeClientCommand(client, "sm_ready");
 }
 
@@ -159,7 +163,7 @@ public Action Command_UnReady(int client, int args)
 		}
 		else
 		{
-			CPrintToChat(client, "%s You are already {lightred}unready.", PLUGIN_PREFIX);
+			CPrintToChat(client, "%t", "Already Unready");
 		}
 	}
 }
@@ -170,7 +174,7 @@ public Action Command_Pause(int client, int args)
 	{
 		if (!g_Paused[0])
 		{
-			CPrintToChatAll("%s A pause has been called. Please use {green}.unpause{default} to resume the match.", PLUGIN_PREFIX);
+			CPrintToChatAll("%t", "Pause Called");
 			ServerCommand("mp_pause_match");
 			g_Paused[0] = true;
 			g_Paused[1] = true;
@@ -198,13 +202,13 @@ public Action Command_UnPause(int client, int args)
 			
 			if (!(g_Paused[1] || g_Paused[2]))
 			{
-				CPrintToChatAll("%s The pause has been {lightred}cancelled.{default} The round will now resume.", PLUGIN_PREFIX);
+				CPrintToChatAll("%t", "Pause Cancelled");
 				ServerCommand("mp_unpause_match");
 				g_Paused[0] = false;
 			}
 			else
 			{
-				CPrintToChatAll("%s Both teams need to write {green}.unpause{default} for the match to resume.", PLUGIN_PREFIX);
+				CPrintToChatAll("%t", "Both Teams");
 			}
 		}
 	}
@@ -216,12 +220,12 @@ public Action Command_Stay(int client, int args)
 	{
 		if (GetClientTeam(client) == g_KnifeWinners)
 		{
-			CPrintToChatAll("%s The knife winners have decided to {lightred}keep their side!", PLUGIN_PREFIX);
+			CPrintToChatAll("%t", "Knife Keep");
 			ChangeMode(MODE_LIVE);
 		}
 		else
 		{
-			CPrintToChat(client, "%s Your team {lightred}didn't {default}win the knife round!");
+			CPrintToChat(client, "%t", "Didnt Win");
 		}
 	}
 }
@@ -232,13 +236,13 @@ public Action Command_Swap(int client, int args)
 	{
 		if (GetClientTeam(client) == g_KnifeWinners)
 		{
-			CPrintToChatAll("%s The knife winners have decided to {lightred}swap sides!", PLUGIN_PREFIX);
+			CPrintToChatAll("%t", "Swap Sides");
 			ServerCommand("mp_swapteams");
 			ChangeMode(MODE_LIVE);
 		}
 		else
 		{
-			CPrintToChat(client, "%s Your team {lightred}didn't win{default} the knife round!");
+			CPrintToChat(client, "%t", "Didnt Win");
 		}
 	}
 }
@@ -256,7 +260,7 @@ public Action Command_EndGame(int client, int args)
 		endmenu.SetTitle("Are you sure you want to end the game?");
 		endmenu.AddItem("yes", "Yes");
 		endmenu.AddItem("no", "No");
-		endmenu.Display(client, MENU_TIME_FOREVER);
+		endmenu.Display(client, SHOW_MENU_TIME);
 	}
 	else
 	{
@@ -266,35 +270,46 @@ public Action Command_EndGame(int client, int args)
 
 public Action Command_Help(int client, int args)
 {
-	static int CommandCount;
-	char Buffer[117], TestString[117]; //The buffer is 117 because 116 (CS:GO MAX CHARS) + 1 ('\0')
+	char Buffer[117], Item[32]; //The buffer is 117 because 116 (CS:GO MAX CHARS) + 1 ('\0')
 	
-	Format(Buffer, sizeof(Buffer), "%s", PLUGIN_PREFIX);
-	Format(TestString, sizeof(TestString), "%s", PLUGIN_PREFIX);
-	
-	while (strlen(TestString) <= sizeof(Buffer))
+	for (int i; i < g_TotalCommands; i++)
 	{
-		CommandCount++;
-		Format(TestString, sizeof(TestString), "%s {green}%s", TestString, g_Commands[CommandCount]);
-		if (CommandCount != g_TotalCommands - 1)
-			Format(TestString, sizeof(TestString), "%s{default},", TestString);
-			
-		if (strlen(TestString) <= sizeof(Buffer))
+		//Do we need to add a prefix?
+		if (StrEqual("", Buffer))
 		{
-			Format(Buffer, sizeof(Buffer), "%s {green}%s", Buffer, g_Commands[CommandCount]);
-			if (CommandCount != g_TotalCommands - 1)
-				Format(Buffer, sizeof(Buffer), "%s{default},", Buffer);
+			Format(Buffer, sizeof(Buffer), "%s", PLUGIN_PREFIX);
+			if (i != 0)
+			{
+				Format(Buffer, sizeof(Buffer), "%s %s", Buffer, Item);
+			}
+		}
+		
+		Format(Item, sizeof(Item), "%s", g_Commands[i]);
+		
+		//If we are not on the last item
+		if (i != (g_TotalCommands - 1))
+		{
+			Format(Item, sizeof(Item), "%s,", Item);
+		}
+		
+		//Will it fit in the string
+		if (strlen(Buffer) + 1 + strlen(Item) < sizeof(Buffer))
+		{
+			Format(Buffer, sizeof(Buffer), "%s %s", Buffer, Item);
 		}
 		else
-			CommandCount--;
+		{
+			CPrintToChat(client, Buffer);
+			Buffer = "";
+		}
 	}
 	
-	CPrintToChat(client, Buffer);
+	if (!StrEqual("", Buffer))
+	{
+		CPrintToChat(client, Buffer);
+	}
 	
-	if (g_TotalCommands > CommandCount)
-		FakeClientCommand(client, "sm_help");
-	else
-		CommandCount = 0;
+	return Plugin_Handled;
 }
 
 /************CUSTOM************/
@@ -316,7 +331,7 @@ void KnifeMenu(int client)
 	KnifeRoundMenu.SetTitle("Would you like to have a knife round?");
 	KnifeRoundMenu.AddItem("yes", "Yes");
 	KnifeRoundMenu.AddItem("no", "No");
-	KnifeRoundMenu.Display(client, 30);
+	KnifeRoundMenu.Display(client, SHOW_MENU_TIME);
 }
 
 void MatchCanClinch(int client)
@@ -325,7 +340,7 @@ void MatchCanClinch(int client)
 	MatchCanClinchMenu.SetTitle("How many rounds do you want to play?");
 	MatchCanClinchMenu.AddItem("yes", "Best of 30 rounds");
 	MatchCanClinchMenu.AddItem("no", "30 rounds total");
-	MatchCanClinchMenu.Display(client, 30);
+	MatchCanClinchMenu.Display(client, SHOW_MENU_TIME);
 }
 
 void OvertimeVote()
@@ -338,7 +353,7 @@ void OvertimeVote()
 	OvertimeVoteMenu.ExitButton = false;
 	OvertimeVoteMenu.DisplayVoteToAll(VOTE_OVERTIME_TIME);
 	
-	CPrintToChatAll("%s Please vote whether you would like overtime next round, or not.", PLUGIN_PREFIX);
+	CPrintToChatAll("%t", "Overtime");
 }
 
 void PracticeModeMenu(int client)
@@ -348,28 +363,28 @@ void PracticeModeMenu(int client)
 	PracticeMenu.AddItem("default", "Default");
 	PracticeMenu.AddItem("gun-round", "Gun Round");
 	PracticeMenu.AddItem("pistol-round", "Pistol Round");
-	PracticeMenu.Display(client, 30);
+	PracticeMenu.Display(client, SHOW_MENU_TIME);
 }
 
 void PracticeMode()
 {
 	g_Leader = 0;
 	ChangeMode(MODE_PRACTICE);
-	CPrintToChatAll("%s Practice mode {lightred}started.", PLUGIN_PREFIX);
+	CPrintToChatAll("%t", "Practice Mode");
 }
 
 void GunRoundMode()
 {
 	g_Leader = 0;
 	ChangeMode(MODE_PRACTICEGUN);
-	CPrintToChatAll("%s Practice gun round mode {lightred}started.", PLUGIN_PREFIX);
+	CPrintToChatAll("%t", "Practice Gun Mode");
 }
 
 void PistolRoundMode()
 {
 	g_Leader = 0;
 	ChangeMode(MODE_PRACTICEPISTOL);
-	CPrintToChatAll("%s Practice pistol round mode {lightred}started.", PLUGIN_PREFIX);
+	CPrintToChatAll("%t", "Practice Pistol Mode");
 }
 
 void ChangeMap(int client)
@@ -393,7 +408,7 @@ void ChangeMap(int client)
 		Counter++;
 	}
 	
-	mapmenu.Display(client, MENU_TIME_FOREVER);
+	mapmenu.Display(client, SHOW_MENU_TIME);
 }
 
 void ChangeMode(int mode)
@@ -404,8 +419,10 @@ void ChangeMode(int mode)
 	ServerCommand("exec gamemode_competitive");
 	ServerCommand("exec sourcemod/gamesetup/default");
 	
-	switch(mode) {
-		case MODE_WARMUP: {
+	switch(mode)
+	{
+		case MODE_WARMUP:
+		{
 			ServerCommand("exec sourcemod/gamesetup/warmup");
 			g_ReadyHud = CreateTimer(1.0, Timer_ReadyHud, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 		}
@@ -413,7 +430,8 @@ void ChangeMode(int mode)
 		case MODE_PRACTICEGUN:ServerCommand("exec sourcemod/gamesetup/practice-gun-round");
 		case MODE_PRACTICEPISTOL:ServerCommand("exec sourcemod/gamesetup/practice-pistol-round");
 		case MODE_KNIFE:ServerCommand("exec sourcemod/gamesetup/knife");
-		case MODE_LIVE: {
+		case MODE_LIVE:
+		{
 			//Let the file execute then check the number of maxrounds for overtime
 			ServerCommand("exec sourcemod/gamesetup/live");
 			
@@ -480,7 +498,7 @@ void PrintLeaderMessage(int client)
 {
 	char Name[64];
 	GetClientName(g_Leader, Name, sizeof(Name));
-	CPrintToChat(client, "%s Only {lightred}%s{default} can access the menu.", PLUGIN_PREFIX, Name);
+	CPrintToChat(client, "%t", "Leader Only", Name);
 }
 
 void PrintGameInfo()
@@ -488,10 +506,9 @@ void PrintGameInfo()
 	//There will always be a leader when this is printed
 	char Name[64];
 	GetClientName(g_Leader, Name, sizeof(Name));
-	CPrintToChatAll("%s", PLUGIN_PREFIX);
-	CPrintToChatAll("Pug leader: {lightred}%s", Name);
-	CPrintToChatAll("Knife round: {lightred}%b", g_Knife);
-	CPrintToChatAll("Best of 30 rounds: {lightred}%b", g_MatchCanClinch);
+	CPrintToChatAll("%t", "Menu Border");
+	CPrintToChatAll("%t", "Menu Admin", Name);
+	CPrintToChatAll("%t", "Menu Border");
 }
 
 void StartRecording()
@@ -501,13 +518,18 @@ void StartRecording()
 	GetCurrentMap(MapName, sizeof(MapName));
 	Format(DemoName, sizeof(DemoName), "%s_%s", MapName, DemoName);
 	ServerCommand("tv_record %s", DemoName);
-	CPrintToChatAll("%s Demo started with name: {lightred}%s", PLUGIN_PREFIX, DemoName);
+	CPrintToChatAll("%t", "Start Recording", DemoName);
+	g_Recording = true;
 }
 
 void StopRecording()
 {
-	ServerCommand("tv_stoprecord");
-	CPrintToChatAll("%s Game ended, demo has {lightred}stopped recording.", PLUGIN_PREFIX);
+	if (g_Recording)
+	{
+		ServerCommand("tv_stoprecord");
+		CPrintToChatAll("%t", "Stop Recording");
+		g_Recording = false;
+	}
 }
 
 /***********HANDLERS***********/
@@ -536,6 +558,10 @@ public int Menu_Handler(Menu menu, MenuAction action, int client, int item)
 	{
 		delete menu;
 	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
 }
 
 public int Menu_Handler_Knife(Menu menu, MenuAction action, int client, int item)
@@ -558,6 +584,10 @@ public int Menu_Handler_Knife(Menu menu, MenuAction action, int client, int item
 		MatchCanClinch(client);
 	}
 	else if (action == MenuAction_Cancel)
+	{
+		delete menu;
+	}
+	else if (action == MenuAction_End)
 	{
 		delete menu;
 	}
@@ -590,6 +620,10 @@ public int Menu_Handler_MatchCanClinch(Menu menu, MenuAction action, int client,
 	{
 		delete menu;
 	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
 }
 
 public int Menu_Handler_Overtime(Menu menu, MenuAction action, int client, int item)
@@ -611,18 +645,18 @@ public void Vote_Handler_Overtime(Menu menu, int num_votes, int num_clients, con
 	{
 		Winner = 1;
 		ServerCommand("mp_overtime_enable 0");
-		CPrintToChatAll("%s Equal amount of votes, {lightred}overtime disabled.", PLUGIN_PREFIX);
+		CPrintToChatAll("%t", "Overtime Equal");
 	}
 	/* If there was a clear winner */
 	else if (StrEqual(Buffer, "yes"))
 	{
 		ServerCommand("mp_overtime_enable 1");
-		CPrintToChatAll("%s Enough votes, {lightred}overtime enabled.", PLUGIN_PREFIX);
+		CPrintToChatAll("%t", "Overtime Enough");
 	}
 	else
 	{
 		ServerCommand("mp_overtime_enable 0");
-		CPrintToChatAll("%s Not enough votes, {lightred}overtime disabled.", PLUGIN_PREFIX);
+		CPrintToChatAll("%t", "Overtime Not Enough");
 	}
 }
 
@@ -650,6 +684,10 @@ public int Menu_Handler_Practice(Menu menu, MenuAction action, int client, int i
 	{
 		delete menu;
 	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
 }
 
 public int Menu_Handler_Map(Menu menu, MenuAction action, int client, int item)
@@ -658,11 +696,15 @@ public int Menu_Handler_Map(Menu menu, MenuAction action, int client, int item)
 	{
 		char Buffer[PLATFORM_MAX_PATH];
 		GetMenuItem(menu, item, Buffer, sizeof(Buffer));
-		
-		CPrintToChatAll("%s Changing map to {lightred}%s.", PLUGIN_PREFIX, Buffer);
+		CPrintToChatAll("%t", "Changing Map", Buffer);
 		CreateTimer(5.0, Timer_ChangeMap, item, TIMER_FLAG_NO_MAPCHANGE);
+		StopRecording();
 	}
 	else if (action == MenuAction_Cancel)
+	{
+		delete menu;
+	}
+	else if (action == MenuAction_End)
 	{
 		delete menu;
 	}
@@ -679,8 +721,9 @@ public int Menu_Handler_EndGame(Menu menu, MenuAction action, int client, int it
 		{
 			char ClientName[32];
 			GetClientName(client, ClientName, 32);
-			CPrintToChatAll("%s The game has been ended by {lightred}%s.", PLUGIN_PREFIX, ClientName);
+			CPrintToChatAll("%t", "Game Ended", ClientName);
 			ChangeMode(MODE_WARMUP);
+			StopRecording();
 		}
 		else
 		{
@@ -688,6 +731,10 @@ public int Menu_Handler_EndGame(Menu menu, MenuAction action, int client, int it
 		}
 	}
 	else if (action == MenuAction_Cancel)
+	{
+		delete menu;
+	}
+	else if (action == MenuAction_End)
 	{
 		delete menu;
 	}
@@ -730,11 +777,11 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			{
 				if (GetClientTeam(i) == g_KnifeWinners)
 				{
-					CPrintToChat(i, "%s Your team won the knife, please use either {green}.stay{default} or {green}.swap.", PLUGIN_PREFIX);
+					CPrintToChat(i, "%t", "Won The Knife");
 				}
 				else
 				{
-					CPrintToChat(i, "%s Waiting on the {green}other teams verdict.", PLUGIN_PREFIX);
+					CPrintToChat(i, "%t", "Waiting On Team");
 				}
 			}
 		}
@@ -753,7 +800,10 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	{
 		int HalfMaxRounds = g_MaxRounds / 2;
 		
-		if (((GetTeamScore(CS_TEAM_CT) == HalfMaxRounds) || (GetTeamScore(CS_TEAM_T) == HalfMaxRounds)) && (GetTeamScore(CS_TEAM_CT) != GetTeamScore(CS_TEAM_T)))
+		if (((GetTeamScore(CS_TEAM_CT) == HalfMaxRounds)
+		|| (GetTeamScore(CS_TEAM_T) == HalfMaxRounds))
+		&& (GetTeamScore(CS_TEAM_CT) != GetTeamScore(CS_TEAM_T))
+		&& (GetConVarInt(FindConVar("mp_overtime_enable")) != 1))
 		{
 			OvertimeVote();
 		}
@@ -769,17 +819,17 @@ public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 			if (GetTeamAliveCount(CS_TEAM_CT) == GetTeamAliveCount(CS_TEAM_T))
 			{
 				int Random = GetRandomInt(CS_TEAM_CT, CS_TEAM_T);
-				CPrintToChatAll("%s Same {lightred}amount of players on both teams, {default}picking random winner.", PLUGIN_PREFIX);
+				CPrintToChatAll("%t", "Knife Draw");
 				g_KnifeWinners = Random;
 			}
 			else if (GetTeamAliveCount(CS_TEAM_CT) > GetTeamAliveCount(CS_TEAM_T))
 			{
-				CPrintToChatAll("%s Time ran out but there are {lightred}more players alive on the CT team.", PLUGIN_PREFIX);
+				CPrintToChatAll("%t", "Knife CT");
 				g_KnifeWinners = CS_TEAM_CT;
 			}
 			else
 			{
-				CPrintToChatAll("%s Time ran out but there are {lightred}more players alive on the T team.", PLUGIN_PREFIX);
+				CPrintToChatAll("%t", "Knife T");
 				g_KnifeWinners = CS_TEAM_T;
 			}
 		}
@@ -792,7 +842,7 @@ public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 	else if (g_Mode == MODE_KNIFEPOST)
 	{
 		int Random = GetRandomInt(0, 1);
-		CPrintToChatAll("%s The winning team {lightred}took too long to decide which side they want, {default}teams will be randomised.", PLUGIN_PREFIX);
+		CPrintToChatAll("%t", "Winners Too Long");
 		
 		if (Random)
 			ServerCommand("mp_swapteams");
@@ -871,7 +921,7 @@ public Action Timer_ReadyHud(Handle timer, any data)
 {
 	if (g_Mode == MODE_WARMUP && ReadyCount() < 10)
 	{
-		PrintHintTextToAll("%i out of %i players ready.\nType <font color='#00FF00'>.ready</font> to ready up!", ReadyCount(), GetClientCount() - 1);
+		PrintHintTextToAll("%t", "Ready Hud", ReadyCount(), GetClientCount() - 1);
 		return Plugin_Continue;
 	}
 	else

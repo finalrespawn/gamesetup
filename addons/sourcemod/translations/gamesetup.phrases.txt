@@ -1,0 +1,165 @@
+// {default}, {darkred}, {purple}, {green}, {olive}, {lime}, {lightred}, {grey}, {yellow}, {orange}, {lightblue}, {darkblue}, {pink}
+
+"Phrases"
+{
+	"Already Ready"
+	{
+		"en"		"[{green}Game Setup{default}] You are already ready!"
+	}
+	
+	"Already Unready"
+	{
+		"en"		"[{green}Game Setup{default}] You are already {lightred}unready."
+	}
+	
+	"Both Teams"
+	{
+		"en"		"[{green}Game Setup{default}] Both teams need to write {green}.unpause {default}for the match to resume."
+	}
+	
+	"Changing Map"
+	{
+		"#format"	"{1:s}"
+		"en"		"[{green}Game Setup{default}] Changing map to {lightred}{1}."
+	}
+	
+	"Didnt Win"
+	{
+		"en"		"[{green}Game Setup{default}] Your team {lightred}didn't {default}win the knife round!"
+	}
+	
+	"Gaben"
+	{
+		"en"		"[{green}Game Setup{default}] Gaben has heard your prayer. His luck will be with you this game!"
+	}
+	
+	"Game Ended"
+	{
+		"#format"	"{1:s}"
+		"en"		"[{green}Game Setup{default}] The game has been ended by {lightred}{1}."
+	}
+	
+	"Knife CT"
+	{
+		"en"		"[{green}Game Setup{default}] Time ran out but there are {lightred}more players alive on the CT team."
+	}
+	
+	"Knife Draw"
+	{
+		"en"		"[{green}Game Setup{default}] Same {lightred}amount of players on both teams, {default}picking random winner."
+	}
+	
+	"Knife Keep"
+	{
+		"en"		"[{green}Game Setup{default}] The knife winners have decided to {lightred}keep their side!"
+	}
+	
+	"Knife Swap"
+	{
+		"en"		"[{green}Game Setup{default}] You are already ready!"
+	}
+	
+	"Knife T"
+	{
+		"en"		"[{green}Game Setup{default}] Time ran out but there are {lightred}more players alive on the T team."
+	}
+	
+	"Leader Only"
+	{
+		"#format"	"{1:s}"
+		"en"		"[{green}Game Setup{default}] Only {lightred}{1} {default}can access the menu."
+	}
+	
+	"Menu Admin"
+	{
+		"#format"	"{1:s}"
+		"en"		"Admin: {lightred}{1}"
+	}
+	
+	"Menu Border"
+	{
+		"en"		"-----[{green}Game Setup{default}]-----"
+	}
+	
+	"Overtime"
+	{
+		"en"		"[{green}Game Setup{default}] Please vote whether you would like overtime next round, or not."
+	}
+	
+	"Overtime Enough"
+	{
+		"en"		"[{green}Game Setup{default}] Enough votes, {lightred}overtime enabled."
+	}
+	
+	"Overtime Equal"
+	{
+		"en"		"[{green}Game Setup{default}] Equal amount of votes, {lightred}overtime disabled."
+	}
+	
+	"Overtime Not Enough"
+	{
+		"en"		"[{green}Game Setup{default}] Not enough votes, {lightred}overtime disabled."
+	}
+	
+	"Pause Called"
+	{
+		"en"		"[{green}Game Setup{default}] A pause has been called. Please use {green}.unpause {default}to resume the match."
+	}
+	
+	"Pause Cancelled"
+	{
+		"en"		"[{green}Game Setup{default}] The pause has been {lightred}cancelled. {default}The round will now resume."
+	}
+	
+	"Practice Mode"
+	{
+		"en"		"[{green}Game Setup{default}] Practice mode {lightred}started."
+	}
+	
+	"Practice Gun Mode"
+	{
+		"en"		"[{green}Game Setup{default}] Practice gun round mode {lightred}started."
+	}
+	
+	"Practice Pistol Mode"
+	{
+		"en"		"[{green}Game Setup{default}] Practice pistol round mode {lightred}started."
+	}
+	
+	"Ready Hud"
+	{
+		"#format"	"{1:i},{2:i}"
+		"en"		"{1} out of {2} players ready.\nType <font color='#00FF00'>.ready</font> to ready up!"
+	}
+	
+	"Start Recording"
+	{
+		"#format"	"{1:s}"
+		"en"		"[{green}Game Setup{default}] Demo started with name: {lightred}{1}"
+	}
+	
+	"Stop Recording"
+	{
+		"en"		"[{green}Game Setup{default}] Game ended, demo has {lightred}stopped recording."
+	}
+	
+	"Swap Sides"
+	{
+		"en"		"[{green}Game Setup{default}] The knife winners have decided to {lightred}swap sides!"
+	}
+	
+	"Waiting On Team"
+	{
+		"en"		"[{green}Game Setup{default}] Waiting on the {green}other teams verdict."
+	}
+	
+	"Winners Too Long"
+	{
+		"en"		"[{green}Game Setup{default}] The winning team {lightred}took too long to decide which side they want, {default}teams will be randomised."
+	}
+	
+	"Won The Knife"
+	{
+		"en"		"[{green}Game Setup{default}] Your team won the knife, please use either {green}.stay{default} or {green}.swap."
+	}
+}
