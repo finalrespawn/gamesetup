@@ -1,6 +1,7 @@
 #include <sourcemod>
 #include <sdktools>
 #include <cstrike>
+#include <smlib>
 #include <colours>
 
 #pragma semicolon 1
@@ -14,10 +15,10 @@
 #define MODE_KNIFEPOST		5
 #define MODE_LIVE			6
 
+#define DISABLED_ITEM "##disabled##"
+#define MAX_COMMAND_LENGTH	16
 #define SHOW_MENU_TIME		30
 #define VOTE_OVERTIME_TIME	15
-
-#define PLUGIN_PREFIX "[{green}Game Setup{default}]"
 
 public Plugin myinfo = {
 	name = "Game Setup",
@@ -27,24 +28,36 @@ public Plugin myinfo = {
 	url = "http://finalrespawn.com"
 };
 
-/***********VARIABLES***********/
+/***************/
+/** VARIABLES **/
+/***************/
 
-Handle g_ReadyHud = null;
+ArrayList g_hLeaders;
+ConVar g_hCaptainSystem;
+ConVar g_hLeaderSystem;
+ConVar g_hOvertimeVote;
+ConVar g_hPluginPrefix;
+ConVar g_hShowReadyHud;
+Handle g_hReadyHud;
 bool g_Knife;
 bool g_MatchCanClinch = true;
 bool g_Paused[3];
 bool g_Ready[MAXPLAYERS + 1];
 bool g_Recording;
-char g_ClanTag[MAXPLAYERS + 1][16];
-char g_Commands[16][16];
+char g_Commands[32][MAX_COMMAND_LENGTH];
 char g_Maps[64][PLATFORM_MAX_PATH];
+char g_PluginPrefix[64];
+int g_CaptainProgress;
+int g_Captains[2];
 int g_KnifeWinners;
 int g_Leader;
 int g_Mode;
 int g_TotalCommands;
 int g_MaxRounds;
 
-/*************START*************/
+/***********/
+/** START **/
+/***********/
 
 public void OnPluginStart()
 {
@@ -58,6 +71,7 @@ public void OnPluginStart()
 	AddChatCommand(".paws", Command_Pause);
 	AddChatCommand(".unpause", Command_UnPause);
 	AddChatCommand(".unpaws", Command_UnPause);
+	AddChatCommand(".map", Command_Map);
 	AddChatCommand(".stay", Command_Stay);
 	AddChatCommand(".swap", Command_Swap);
 	AddChatCommand(".switch", Command_Swap);
@@ -66,13 +80,23 @@ public void OnPluginStart()
 	AddChatCommand(".help", Command_Help);
 	AddChatCommand(".commands", Command_Help);
 	
+	g_hCaptainSystem = CreateConVar("sm_gamesetup_captainsystem", "1", "Enable/disable the captain system.", _, true, 0.0, true, 1.0);
+	g_hLeaderSystem = CreateConVar("sm_gamesetup_leadersystem", "1", "Enable/disable the leaders.cfg file.", _, true, 0.0, true, 1.0);
+	g_hOvertimeVote = CreateConVar("sm_gamesetup_overtimevote", "1", "Enable/disable the overtime vote in competitive play.", _, true, 0.0, true, 1.0);
+	g_hPluginPrefix = CreateConVar("sm_gamesetup_pluginprefix", "[{green}Game Setup{default}] ", "Change the plugin prefix, see the translations file for colours.");
+	g_hShowReadyHud = CreateConVar("sm_gamesetup_showreadyhud", "1", "Enable/disable the ready hud showing for everyone.", _, true, 0.0, true, 1.0);
+	
+	AutoExecConfig();
+	
+	GetLeaders();
+	
 	HookEvent("round_start", Event_RoundStart);
 	HookEvent("round_end", Event_RoundEnd);
 	HookEvent("cs_win_panel_match", Event_EndGame);
 	
 	//Clan tag events
-	HookEvent("player_team", Event_ClanTag, EventHookMode_Post);
-	HookEvent("player_spawn", Event_ClanTag, EventHookMode_Post);
+	HookEvent("player_team", Event_ClanTag);
+	HookEvent("player_spawn", Event_ClanTag);
 	
 	LoadTranslations("gamesetup.phrases");
 }
@@ -91,10 +115,33 @@ public void OnMapEnd()
 	}
 }
 
-/***********COMMANDS***********/
+public void OnConfigsExecuted()
+{
+	g_hPluginPrefix.GetString(g_PluginPrefix, sizeof(g_PluginPrefix));
+}
+
+public void OnClientDisconnect_Post(int client)
+{
+	g_Ready[client] = false;
+	
+	if (client == g_Leader)
+		SetLeader(0);
+		
+	if (client == g_Captains[0])
+		g_Captains[0] = 0;
+		
+	if (client == g_Captains[1])
+		g_Captains[1] = 0;
+}
+
+/**************/
+/** COMMANDS **/
+/**************/
 
 public Action Command_Menu(int client, int args)
 {
+	SetLeader(client);
+	
 	if (IsLeader(client))
 	{
 		Menu menu = new Menu(Menu_Handler);
@@ -102,11 +149,19 @@ public Action Command_Menu(int client, int args)
 		menu.AddItem("start", "Start Game");
 		menu.AddItem("practice", "Practice Mode");
 		menu.AddItem("map", "Change Map");
+		
+		if (g_hCaptainSystem.BoolValue)
+		{
+			menu.AddItem("captains", "Pick Captains");
+			
+			char Captain[64];
+			Format(Captain, sizeof(Captain), "Captain #1: %s", GetCaptainName(0));
+			menu.AddItem(DISABLED_ITEM, Captain, ITEMDRAW_DISABLED);
+			Format(Captain, sizeof(Captain), "Captain #2: %s", GetCaptainName(1));
+			menu.AddItem(DISABLED_ITEM, Captain, ITEMDRAW_DISABLED);
+		}
+		
 		menu.Display(client, SHOW_MENU_TIME);
-	}
-	else
-	{
-		PrintLeaderMessage(client);
 	}
 }
 
@@ -114,58 +169,126 @@ public Action Command_Ready(int client, int args)
 {
 	if (g_Mode == MODE_WARMUP)
 	{
-		if (g_Ready[client])
+		if (!g_hCaptainSystem.BoolValue)
 		{
-			CPrintToChat(client, "%t", "Already Ready");
+			if (g_Ready[client])
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Already Ready");
+			}
+			else
+			{
+				g_Ready[client] = true;
+				HandleClanTag(client);
+			}
 		}
 		else
 		{
-			g_Ready[client] = true;
-			HandleClanTag(client);
-			
-			//If we have the required players start the game
-			if (ReadyCount() == 10)
+			if (!IsCaptain(client))
 			{
-				if (g_Knife)
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+				return Plugin_Handled;
+			}
+			
+			int Team = GetClientTeam(client);
+			
+			for (int i = 1; i <= MaxClients; i++)
+			{
+				if (!IsClientInGame(i))
+					continue;
+					
+				if (IsFakeClient(i))
+					continue;
+					
+				if (GetClientTeam(i) == Team)
 				{
-					ChangeMode(MODE_KNIFE);
-				}
-				else
-				{
-					ChangeMode(MODE_LIVE);
-				}
-				
-				//Stop the timer that shows the hud
-				if (g_ReadyHud != null)
-				{
-					KillTimer(g_ReadyHud);
-					g_ReadyHud = null;
+					g_Ready[i] = true;
+					HandleClanTag(i);
 				}
 			}
 		}
+		
+		//If we have the required players start the game
+		if (ReadyCount() == 10)
+		{
+			if (g_Knife)
+			{
+				ChangeMode(MODE_KNIFE);
+			}
+			else
+			{
+				ChangeMode(MODE_LIVE);
+			}
+			
+			//Stop the timer that shows the hud
+			if (g_hReadyHud != null)
+			{
+				KillTimer(g_hReadyHud);
+				g_hReadyHud = null;
+			}
+		}
 	}
+	
+	return Plugin_Handled;
 }
 
 public Action Command_Gaben(int client, int args)
 {
-	CPrintToChat(client, "%t", "Gaben");
+	if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+	{
+		CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+		return Plugin_Handled;
+	}
+	
+	CPrintToChat(client, "%s%t", g_PluginPrefix, "Gaben");
 	FakeClientCommand(client, "sm_ready");
+	
+	return Plugin_Handled;
 }
 
 public Action Command_UnReady(int client, int args)
 {
 	if (g_Mode == MODE_WARMUP)
 	{
-		if (g_Ready[client] == true)
+		if (!g_hCaptainSystem.BoolValue)
 		{
-			g_Ready[client] = false;
-			HandleClanTag(client);
+			if (g_Ready[client] == true)
+			{
+				g_Ready[client] = false;
+				HandleClanTag(client);
+			}
+			else
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Already Unready");
+			}
 		}
 		else
 		{
-			CPrintToChat(client, "%t", "Already Unready");
+			if (!IsCaptain(client))
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+				return Plugin_Handled;
+			}
+			
+			int Team = GetClientTeam(client);
+			
+			for (int i = 1; i <= MaxClients; i++)
+			{
+				if (!IsClientInGame(i))
+					continue;
+					
+				if (IsFakeClient(i))
+					continue;
+					
+				if (GetClientTeam(i) == Team)
+				{
+					g_Ready[i] = false;
+					HandleClanTag(i);
+				}
+			}
 		}
 	}
+	
+	return Plugin_Handled;
 }
 
 public Action Command_Pause(int client, int args)
@@ -174,13 +297,21 @@ public Action Command_Pause(int client, int args)
 	{
 		if (!g_Paused[0])
 		{
-			CPrintToChatAll("%t", "Pause Called");
+			if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+				return Plugin_Handled;
+			}
+			
+			CPrintToChatAll("%s%t", g_PluginPrefix, "Pause Called");
 			ServerCommand("mp_pause_match");
 			g_Paused[0] = true;
 			g_Paused[1] = true;
 			g_Paused[2] = true;
 		}
 	}
+	
+	return Plugin_Handled;
 }
 
 public Action Command_UnPause(int client, int args)
@@ -189,6 +320,12 @@ public Action Command_UnPause(int client, int args)
 	{
 		if (g_Paused[0])
 		{
+			if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+				return Plugin_Handled;
+			}
+			
 			int Team = GetClientTeam(client);
 			
 			if (Team == CS_TEAM_CT && g_Paused[1])
@@ -202,58 +339,96 @@ public Action Command_UnPause(int client, int args)
 			
 			if (!(g_Paused[1] || g_Paused[2]))
 			{
-				CPrintToChatAll("%t", "Pause Cancelled");
+				CPrintToChatAll("%s%t", g_PluginPrefix, "Pause Cancelled");
 				ServerCommand("mp_unpause_match");
 				g_Paused[0] = false;
 			}
 			else
 			{
-				CPrintToChatAll("%t", "Both Teams");
+				CPrintToChatAll("%s%t", g_PluginPrefix, "Both Teams");
 			}
 		}
 	}
+	
+	return Plugin_Handled;
+}
+
+public Action Command_Map(int client, int args)
+{
+	if (g_Mode == MODE_KNIFEPOST)
+	{
+		if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+		{
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+			return Plugin_Handled;
+		}
+		
+		if (GetClientTeam(client) == g_KnifeWinners)
+		{
+			ChangeMap(client);
+		}
+		else
+		{
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Didnt Win");
+		}
+	}
+	
+	return Plugin_Handled;
 }
 
 public Action Command_Stay(int client, int args)
 {
 	if (g_Mode == MODE_KNIFEPOST)
 	{
+		if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+		{
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+			return Plugin_Handled;
+		}
+		
 		if (GetClientTeam(client) == g_KnifeWinners)
 		{
-			CPrintToChatAll("%t", "Knife Keep");
+			CPrintToChatAll("%s%t", g_PluginPrefix, "Knife Keep");
 			ChangeMode(MODE_LIVE);
 		}
 		else
 		{
-			CPrintToChat(client, "%t", "Didnt Win");
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Didnt Win");
 		}
 	}
+	
+	return Plugin_Handled;
 }
 
 public Action Command_Swap(int client, int args)
 {
 	if (g_Mode == MODE_KNIFEPOST)
 	{
+		if (g_hCaptainSystem.BoolValue && !IsCaptain(client))
+		{
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Captain");
+			return Plugin_Handled;
+		}
+		
 		if (GetClientTeam(client) == g_KnifeWinners)
 		{
-			CPrintToChatAll("%t", "Swap Sides");
+			CPrintToChatAll("%s%t", g_PluginPrefix, "Swap Sides");
 			ServerCommand("mp_swapteams");
 			ChangeMode(MODE_LIVE);
 		}
 		else
 		{
-			CPrintToChat(client, "%t", "Didnt Win");
+			CPrintToChat(client, "%s%t", g_PluginPrefix, "Didnt Win");
 		}
 	}
-}
-
-public Action Command_Switch(int client, int args)
-{
-	FakeClientCommand(client, "sm_swap");
+	
+	return Plugin_Handled;
 }
 
 public Action Command_EndGame(int client, int args)
 {
+	SetLeader(client);
+	
 	if (IsLeader(client))
 	{
 		Menu endmenu = new Menu(Menu_Handler_EndGame);
@@ -261,10 +436,6 @@ public Action Command_EndGame(int client, int args)
 		endmenu.AddItem("yes", "Yes");
 		endmenu.AddItem("no", "No");
 		endmenu.Display(client, SHOW_MENU_TIME);
-	}
-	else
-	{
-		PrintLeaderMessage(client);
 	}
 }
 
@@ -277,7 +448,7 @@ public Action Command_Help(int client, int args)
 		//Do we need to add a prefix?
 		if (StrEqual("", Buffer))
 		{
-			Format(Buffer, sizeof(Buffer), "%s", PLUGIN_PREFIX);
+			Format(Buffer, sizeof(Buffer), "%s", RemoveEndSpaces(g_PluginPrefix));
 			if (i != 0)
 			{
 				Format(Buffer, sizeof(Buffer), "%s %s", Buffer, Item);
@@ -312,16 +483,17 @@ public Action Command_Help(int client, int args)
 	return Plugin_Handled;
 }
 
-/************CUSTOM************/
+/************/
+/** CUSTOM **/
+/************/
 
-void AddChatCommand(const char command[16], ConCmd callback)
+void AddChatCommand(const char command[MAX_COMMAND_LENGTH], ConCmd callback)
 {
 	g_Commands[g_TotalCommands] = command;
 	g_TotalCommands++;
 	
 	char Buffer[32];
-	Buffer = RemoveFirstChar(command);
-	Format(Buffer, 32, "sm_%s", Buffer);
+	Format(Buffer, sizeof(Buffer), "sm_%s", RemoveFirstChar(command));
 	RegConsoleCmd(Buffer, callback);
 }
 
@@ -353,7 +525,7 @@ void OvertimeVote()
 	OvertimeVoteMenu.ExitButton = false;
 	OvertimeVoteMenu.DisplayVoteToAll(VOTE_OVERTIME_TIME);
 	
-	CPrintToChatAll("%t", "Overtime");
+	CPrintToChatAll("%s%t", g_PluginPrefix, "Overtime");
 }
 
 void PracticeModeMenu(int client)
@@ -361,30 +533,30 @@ void PracticeModeMenu(int client)
 	Menu PracticeMenu = new Menu(Menu_Handler_Practice);
 	PracticeMenu.SetTitle("Practices modes");
 	PracticeMenu.AddItem("default", "Default");
-	PracticeMenu.AddItem("gun-round", "Gun Round");
-	PracticeMenu.AddItem("pistol-round", "Pistol Round");
+	PracticeMenu.AddItem("gunround", "Gun Round");
+	PracticeMenu.AddItem("pistolround", "Pistol Round");
 	PracticeMenu.Display(client, SHOW_MENU_TIME);
 }
 
 void PracticeMode()
 {
-	g_Leader = 0;
+	SetLeader(0);
 	ChangeMode(MODE_PRACTICE);
-	CPrintToChatAll("%t", "Practice Mode");
+	CPrintToChatAll("%s%t", g_PluginPrefix, "Practice Mode");
 }
 
 void GunRoundMode()
 {
-	g_Leader = 0;
+	SetLeader(0);
 	ChangeMode(MODE_PRACTICEGUN);
-	CPrintToChatAll("%t", "Practice Gun Mode");
+	CPrintToChatAll("%s%t", g_PluginPrefix, "Practice Gun Mode");
 }
 
 void PistolRoundMode()
 {
-	g_Leader = 0;
+	SetLeader(0);
 	ChangeMode(MODE_PRACTICEPISTOL);
-	CPrintToChatAll("%t", "Practice Pistol Mode");
+	CPrintToChatAll("%s%t", g_PluginPrefix, "Practice Pistol Mode");
 }
 
 void ChangeMap(int client)
@@ -411,6 +583,35 @@ void ChangeMap(int client)
 	mapmenu.Display(client, SHOW_MENU_TIME);
 }
 
+void PickCaptainsMenu(int client)
+{
+	Menu CaptainsMenu = new Menu(Menu_Handler_Captains);
+	CaptainsMenu.SetTitle("Captain #%i", g_CaptainProgress + 1);
+	
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientInGame(i))
+			continue;
+			
+		if (IsFakeClient(i))
+			continue;
+			
+		char Name[64];
+		GetClientName(i, Name, sizeof(Name));
+		
+		char Client[4];
+		IntToString(i, Client, sizeof(Client));
+		
+		if (!((g_CaptainProgress == 1)
+		&& (i == g_Captains[0])))
+		{
+			CaptainsMenu.AddItem(Client, Name);
+		}
+	}
+	
+	CaptainsMenu.Display(client, SHOW_MENU_TIME);
+}
+
 void ChangeMode(int mode)
 {
 	g_Mode = mode;
@@ -424,11 +625,14 @@ void ChangeMode(int mode)
 		case MODE_WARMUP:
 		{
 			ServerCommand("exec sourcemod/gamesetup/warmup");
-			g_ReadyHud = CreateTimer(1.0, Timer_ReadyHud, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+			if (g_hShowReadyHud.BoolValue)
+			{
+				g_hReadyHud = CreateTimer(1.0, Timer_ReadyHud, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+			}
 		}
 		case MODE_PRACTICE:ServerCommand("exec sourcemod/gamesetup/practice");
-		case MODE_PRACTICEGUN:ServerCommand("exec sourcemod/gamesetup/practice-gun-round");
-		case MODE_PRACTICEPISTOL:ServerCommand("exec sourcemod/gamesetup/practice-pistol-round");
+		case MODE_PRACTICEGUN:ServerCommand("exec sourcemod/gamesetup/practicegun");
+		case MODE_PRACTICEPISTOL:ServerCommand("exec sourcemod/gamesetup/practicepistol");
 		case MODE_KNIFE:ServerCommand("exec sourcemod/gamesetup/knife");
 		case MODE_LIVE:
 		{
@@ -446,21 +650,12 @@ void ChangeMode(int mode)
 
 void HandleClanTag(int client)
 {
-	if (IsClientInGame(client))
+	if ((0 < client)
+	&& (client <= MaxClients)
+	&& IsClientInGame(client))
 	{
 		if (!IsFakeClient(client))
 		{
-			//Check to see if their clan tag isn't stored yet
-			if (StrEqual(g_ClanTag[client], ""))
-			{
-				char Buffer[sizeof(g_ClanTag[])];
-				int ClanTag = CS_GetClientClanTag(client, Buffer, sizeof(g_ClanTag[]));
-				if (ClanTag)
-					g_ClanTag[client] = Buffer;
-				else
-					g_ClanTag[client] = "0";
-			}
-			
 			//Now we see what we need to set their clan tag
 			if (g_Mode == MODE_WARMUP)
 			{
@@ -473,42 +668,118 @@ void HandleClanTag(int client)
 					CS_SetClientClanTag(client, "[Not Ready]");
 				}
 			}
+		}
+	}
+}
+
+void GetLeaders()
+{
+	g_hLeaders = new ArrayList(32, 0);
+	
+	char Path[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, Path, sizeof(Path), "configs/gamesetup/leaders.cfg");
+	
+	KeyValues Leaders = new KeyValues("Leaders");
+	Leaders.ImportFromFile(Path);
+	Leaders.GotoFirstSubKey();
+	
+	do {
+		char SteamId[32];
+		Leaders.GetString("steamid", SteamId, sizeof(SteamId));
+		ReplaceString(SteamId, sizeof(SteamId), "STEAM_0", "STEAM_1");
+		g_hLeaders.PushString(SteamId);
+	} while (Leaders.GotoNextKey());
+	
+	delete Leaders;
+}
+
+void SetLeader(int client)
+{
+	if (client == 0)
+	{
+		g_Leader = 0;
+	}
+	else if (g_Leader == 0)
+	{
+		if (g_hLeaderSystem.BoolValue)
+		{
+			char SteamId[32];
+			GetClientAuthId(client, AuthId_Steam2, SteamId, sizeof(SteamId));
+			if (g_hLeaders.FindString(SteamId) != -1)
+			{
+				g_Leader = client;
+			}
 			else
 			{
-				if (!StrEqual(g_ClanTag[client], "0"))
-				{
-					CS_SetClientClanTag(client, g_ClanTag[client]);
-				}
-				else
-				{
-					CS_SetClientClanTag(client, "");
-				}
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Leader");
 			}
 		}
+		else
+		{
+			g_Leader = client;
+		}
+	}
+	else if (client != g_Leader)
+	{
+		char Name[64];
+		GetClientName(g_Leader, Name, sizeof(Name));
+		CPrintToChat(client, "%s%t", g_PluginPrefix, "Leader Only", Name);
 	}
 }
 
 bool IsLeader(int client)
 {
-	if (g_Leader == client || !g_Leader)return true;
-	else return false;
+	return (client == g_Leader);
 }
 
-void PrintLeaderMessage(int client)
+bool IsCaptain(int client)
+{
+	if (IsLeader(client)
+	|| (client == g_Captains[0])
+	|| (client == g_Captains[1]))
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+char[] GetCaptainName(int captain)
 {
 	char Name[64];
-	GetClientName(g_Leader, Name, sizeof(Name));
-	CPrintToChat(client, "%t", "Leader Only", Name);
+	
+	if ((0 < g_Captains[captain]) && (g_Captains[captain] <= MaxClients))
+	{
+		if (IsClientInGame(g_Captains[captain]))
+		{
+			GetClientName(g_Captains[captain], Name, sizeof(Name));
+		}
+	}
+	else
+	{
+		Name = "None";
+	}
+	
+	return Name;
 }
 
 void PrintGameInfo()
 {
 	//There will always be a leader when this is printed
 	char Name[64];
+	
+	CPrintToChatAll("%t", "Menu Border", RemoveEndSpaces(g_PluginPrefix));
+	
 	GetClientName(g_Leader, Name, sizeof(Name));
-	CPrintToChatAll("%t", "Menu Border");
 	CPrintToChatAll("%t", "Menu Admin", Name);
-	CPrintToChatAll("%t", "Menu Border");
+	
+	if (g_hCaptainSystem.BoolValue)
+	{
+		CPrintToChatAll("%t", "Menu Captain", 1, GetCaptainName(0));
+		CPrintToChatAll("%t", "Menu Captain", 2, GetCaptainName(1));
+	}
+	
+	CPrintToChatAll("%t", "Menu Border", RemoveEndSpaces(g_PluginPrefix));
 }
 
 void StartRecording()
@@ -518,7 +789,7 @@ void StartRecording()
 	GetCurrentMap(MapName, sizeof(MapName));
 	Format(DemoName, sizeof(DemoName), "%s_%s", MapName, DemoName);
 	ServerCommand("tv_record %s", DemoName);
-	CPrintToChatAll("%t", "Start Recording", DemoName);
+	CPrintToChatAll("%s%t", g_PluginPrefix, "Start Recording", DemoName);
 	g_Recording = true;
 }
 
@@ -527,12 +798,14 @@ void StopRecording()
 	if (g_Recording)
 	{
 		ServerCommand("tv_stoprecord");
-		CPrintToChatAll("%t", "Stop Recording");
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Stop Recording");
 		g_Recording = false;
 	}
 }
 
-/***********HANDLERS***********/
+/**************/
+/** HANDLERS **/
+/**************/
 
 public int Menu_Handler(Menu menu, MenuAction action, int client, int item)
 {
@@ -553,15 +826,26 @@ public int Menu_Handler(Menu menu, MenuAction action, int client, int item)
 		{
 			ChangeMap(client);
 		}
-	}
-	else if (action == MenuAction_Cancel)
-	{
-		delete menu;
+		else if (StrEqual("captains", Buffer))
+		{
+			if (GetHumanClientCount() > 1)
+			{
+				g_CaptainProgress = 0;
+				PickCaptainsMenu(client);
+			}
+			else
+			{
+				CPrintToChat(client, "%s%t", g_PluginPrefix, "Not Enough Players");
+				FakeClientCommand(client, "sm_menu");
+			}
+		}
 	}
 	else if (action == MenuAction_End)
 	{
 		delete menu;
 	}
+	
+	return 0;
 }
 
 public int Menu_Handler_Knife(Menu menu, MenuAction action, int client, int item)
@@ -582,10 +866,6 @@ public int Menu_Handler_Knife(Menu menu, MenuAction action, int client, int item
 		
 		//Show them the next menu
 		MatchCanClinch(client);
-	}
-	else if (action == MenuAction_Cancel)
-	{
-		delete menu;
 	}
 	else if (action == MenuAction_End)
 	{
@@ -610,15 +890,10 @@ public int Menu_Handler_MatchCanClinch(Menu menu, MenuAction action, int client,
 		}
 		
 		//Print game information
-		g_Leader = client;
 		PrintGameInfo();
 		
 		//Change the mode
 		ChangeMode(MODE_WARMUP);
-	}
-	else if (action == MenuAction_Cancel)
-	{
-		delete menu;
 	}
 	else if (action == MenuAction_End)
 	{
@@ -645,18 +920,18 @@ public void Vote_Handler_Overtime(Menu menu, int num_votes, int num_clients, con
 	{
 		Winner = 1;
 		ServerCommand("mp_overtime_enable 0");
-		CPrintToChatAll("%t", "Overtime Equal");
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Overtime Equal");
 	}
 	/* If there was a clear winner */
 	else if (StrEqual(Buffer, "yes"))
 	{
 		ServerCommand("mp_overtime_enable 1");
-		CPrintToChatAll("%t", "Overtime Enough");
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Overtime Enough");
 	}
 	else
 	{
 		ServerCommand("mp_overtime_enable 0");
-		CPrintToChatAll("%t", "Overtime Not Enough");
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Overtime Not Enough");
 	}
 }
 
@@ -665,24 +940,20 @@ public int Menu_Handler_Practice(Menu menu, MenuAction action, int client, int i
 	if (action == MenuAction_Select)
 	{
 		char Buffer[32];
-		GetMenuItem(menu, item, Buffer, 32);
+		GetMenuItem(menu, item, Buffer, sizeof(Buffer));
 		
 		if (StrEqual("default", Buffer))
 		{
 			PracticeMode();
 		}
-		else if (StrEqual("gun-round", Buffer))
+		else if (StrEqual("gunround", Buffer))
 		{
 			GunRoundMode();
 		}
-		else if (StrEqual("pistol-round", Buffer))
+		else if (StrEqual("pistolround", Buffer))
 		{
 			PistolRoundMode();
 		}
-	}
-	else if (action == MenuAction_Cancel)
-	{
-		delete menu;
 	}
 	else if (action == MenuAction_End)
 	{
@@ -696,13 +967,40 @@ public int Menu_Handler_Map(Menu menu, MenuAction action, int client, int item)
 	{
 		char Buffer[PLATFORM_MAX_PATH];
 		GetMenuItem(menu, item, Buffer, sizeof(Buffer));
-		CPrintToChatAll("%t", "Changing Map", Buffer);
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Changing Map", Buffer);
 		CreateTimer(5.0, Timer_ChangeMap, item, TIMER_FLAG_NO_MAPCHANGE);
 		StopRecording();
 	}
-	else if (action == MenuAction_Cancel)
+	else if (action == MenuAction_End)
 	{
 		delete menu;
+	}
+}
+
+public int Menu_Handler_Captains(Menu menu, MenuAction action, int client, int item)
+{
+	if (action == MenuAction_Select)
+	{
+		char Buffer[PLATFORM_MAX_PATH];
+		GetMenuItem(menu, item, Buffer, sizeof(Buffer));
+		int Captain = StringToInt(Buffer);
+		g_Captains[g_CaptainProgress] = Captain;
+		
+		if (g_CaptainProgress == 0)
+		{
+			g_CaptainProgress++;
+			PickCaptainsMenu(client);
+		}
+		else if (g_CaptainProgress == 1)
+		{
+			FakeClientCommand(client, "sm_menu");
+		}
+	}
+	else if (action == MenuAction_Cancel && (g_CaptainProgress == 1))
+	{
+		//If 2 captains aren't selected no one is captain
+		g_Captains[0] = 0;
+		g_Captains[1] = 0;
 	}
 	else if (action == MenuAction_End)
 	{
@@ -721,7 +1019,7 @@ public int Menu_Handler_EndGame(Menu menu, MenuAction action, int client, int it
 		{
 			char ClientName[32];
 			GetClientName(client, ClientName, 32);
-			CPrintToChatAll("%t", "Game Ended", ClientName);
+			CPrintToChatAll("%s%t", g_PluginPrefix, "Game Ended", ClientName);
 			ChangeMode(MODE_WARMUP);
 			StopRecording();
 		}
@@ -730,17 +1028,15 @@ public int Menu_Handler_EndGame(Menu menu, MenuAction action, int client, int it
 			delete menu;
 		}
 	}
-	else if (action == MenuAction_Cancel)
-	{
-		delete menu;
-	}
 	else if (action == MenuAction_End)
 	{
 		delete menu;
 	}
 }
 
-/************EVENTS************/
+/************/
+/** EVENTS **/
+/************/
 
 public Action OnClientSayCommand(int client, const char[] command, const char[] args)
 {
@@ -748,9 +1044,7 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 	{
 		if (StrEqual(args, g_Commands[i], false))
 		{
-			char Buffer[32];
-			Buffer = RemoveFirstChar(args);
-			FakeClientCommand(client, "sm_%s", Buffer);
+			FakeClientCommand(client, "sm_%s", RemoveFirstChar(args));
 		}
 	}
 	
@@ -759,15 +1053,44 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 
 public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
-	if (g_Mode == MODE_KNIFE)
+	if (g_Mode == MODE_PRACTICEPISTOL)
 	{
-		CPrintToChatAll("%s {darkred}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {orange}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {yellow}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {green}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {lightblue}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {darkblue}KNIFE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {purple}KNIFE!", PLUGIN_PREFIX);
+		for (int i = 1; i <= MaxClients; i++)
+		{
+			if (!IsClientInGame(i))
+				continue;
+				
+			if (!IsPlayerAlive(i))
+				continue;
+				
+			Client_RemoveAllWeapons(i, "weapon_c4");
+			
+			int Team = GetClientTeam(i);
+			char Secondary[64];
+			
+			if (Team == CS_TEAM_CT)
+			{
+				GetConVarString(FindConVar("mp_ct_default_secondary"), Secondary, sizeof(Secondary));
+				GivePlayerItem(i, Secondary);
+				GivePlayerItem(i, "weapon_knife");
+			}
+			else if (Team == CS_TEAM_T)
+			{
+				GetConVarString(FindConVar("mp_t_default_secondary"), Secondary, sizeof(Secondary));
+				GivePlayerItem(i, Secondary);
+				GivePlayerItem(i, "weapon_knife_t");
+			}
+		}
+	}
+	else if (g_Mode == MODE_KNIFE)
+	{
+		CPrintToChatAll("%s{darkred}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{orange}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{yellow}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{green}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{lightblue}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{darkblue}KNIFE!", g_PluginPrefix);
+		CPrintToChatAll("%s{purple}KNIFE!", g_PluginPrefix);
 	}
 	else if (g_Mode == MODE_KNIFEPOST)
 	{
@@ -777,24 +1100,31 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 			{
 				if (GetClientTeam(i) == g_KnifeWinners)
 				{
-					CPrintToChat(i, "%t", "Won The Knife");
+					if (!g_hCaptainSystem.BoolValue)
+					{
+						CPrintToChat(i, "%s%t", g_PluginPrefix, "Won The Knife");
+					}
+					else
+					{
+						CPrintToChat(i, "%s%t", g_PluginPrefix, "Won The Knife Captain");
+					}
 				}
 				else
 				{
-					CPrintToChat(i, "%t", "Waiting On Team");
+					CPrintToChat(i, "%s%t", g_PluginPrefix, "Waiting On Team");
 				}
 			}
 		}
 	}
 	else if (g_Mode == MODE_LIVE && GetTeamScore(CS_TEAM_CT) == 0 && GetTeamScore(CS_TEAM_T) == 0)
 	{
-		CPrintToChatAll("%s {darkred}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {orange}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {yellow}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {green}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {lightblue}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {darkblue}LIVE!", PLUGIN_PREFIX);
-		CPrintToChatAll("%s {purple}LIVE!", PLUGIN_PREFIX);
+		CPrintToChatAll("%s{darkred}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{orange}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{yellow}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{green}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{lightblue}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{darkblue}LIVE!", g_PluginPrefix);
+		CPrintToChatAll("%s{purple}LIVE!", g_PluginPrefix);
 	}
 	else if ((-1 <= (GetTeamScore(CS_TEAM_CT) - GetTeamScore(CS_TEAM_T))) && ((GetTeamScore(CS_TEAM_CT) - GetTeamScore(CS_TEAM_T)) <= 1))
 	{
@@ -803,6 +1133,8 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		if (((GetTeamScore(CS_TEAM_CT) == HalfMaxRounds)
 		|| (GetTeamScore(CS_TEAM_T) == HalfMaxRounds))
 		&& (GetTeamScore(CS_TEAM_CT) != GetTeamScore(CS_TEAM_T))
+		&& (g_hOvertimeVote.BoolValue)
+		&& (g_Mode == MODE_LIVE)
 		&& (GetConVarInt(FindConVar("mp_overtime_enable")) != 1))
 		{
 			OvertimeVote();
@@ -819,39 +1151,36 @@ public Action Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 			if (GetTeamAliveCount(CS_TEAM_CT) == GetTeamAliveCount(CS_TEAM_T))
 			{
 				int Random = GetRandomInt(CS_TEAM_CT, CS_TEAM_T);
-				CPrintToChatAll("%t", "Knife Draw");
+				CPrintToChatAll("%s%t", g_PluginPrefix, "Knife Draw");
 				g_KnifeWinners = Random;
 			}
 			else if (GetTeamAliveCount(CS_TEAM_CT) > GetTeamAliveCount(CS_TEAM_T))
 			{
-				CPrintToChatAll("%t", "Knife CT");
+				CPrintToChatAll("%s%t", g_PluginPrefix, "Knife CT");
 				g_KnifeWinners = CS_TEAM_CT;
 			}
 			else
 			{
-				CPrintToChatAll("%t", "Knife T");
+				CPrintToChatAll("%s%t", g_PluginPrefix, "Knife T");
 				g_KnifeWinners = CS_TEAM_T;
 			}
 		}
 		else
 		{
 			g_KnifeWinners = GetEventInt(event, "winner");
-			ChangeMode(MODE_KNIFEPOST);
 		}
+		
+		ChangeMode(MODE_KNIFEPOST);
 	}
 	else if (g_Mode == MODE_KNIFEPOST)
 	{
 		int Random = GetRandomInt(0, 1);
-		CPrintToChatAll("%t", "Winners Too Long");
+		CPrintToChatAll("%s%t", g_PluginPrefix, "Winners Too Long");
 		
 		if (Random)
 			ServerCommand("mp_swapteams");
 			
 		ChangeMode(MODE_LIVE);
-	}
-	else if (g_Mode == MODE_PRACTICEPISTOL)
-	{
-		ServerCommand("mp_restartgame 1");
 	}
 }
 
@@ -867,14 +1196,9 @@ public Action Event_ClanTag(Event event, const char[] name, bool dontBroadcast)
 	CreateTimer(1.0, Timer_ClanTag, Client, TIMER_FLAG_NO_MAPCHANGE);
 }
 
-public void OnClientDisconnect_Post(int client)
-{
-	g_Ready[client] = false;
-	g_ClanTag[client] = "";
-	if (g_Leader == client)g_Leader = 0;
-}
-
-/************STOCKS************/
+/************/
+/** STOCKS **/
+/************/
 
 stock int ReadyCount()
 {
@@ -886,6 +1210,24 @@ stock int ReadyCount()
 				Ready++;
 				
 	return Ready;
+}
+
+stock int GetHumanClientCount()
+{
+	int Count;
+	
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientInGame(i))
+			continue;
+			
+		if (IsFakeClient(i))
+			continue;
+			
+		Count++;
+	}
+	
+	return Count;
 }
 
 stock int GetTeamAliveCount(int team)
@@ -902,15 +1244,36 @@ stock int GetTeamAliveCount(int team)
 
 stock char[] RemoveFirstChar(const char[] command)
 {
-	char Buffer[32];
+	char Buffer[MAX_COMMAND_LENGTH];
+	strcopy(Buffer, sizeof(Buffer), command);
 	
-	for (int i = 1; i <= 32; i++)
+	for (int i = 1; i < sizeof(Buffer); i++)
+	{
 		Buffer[i - 1] = command[i];
-		
+	}
+	
 	return Buffer;
 }
 
-/************TIMERS************/
+stock char[] RemoveEndSpaces(const char[] string)
+{
+	char Buffer[32];
+	strcopy(Buffer, sizeof(Buffer), string);
+	
+	int Counter = strlen(Buffer) - 1;
+	
+	while (Buffer[Counter] == ' ')
+	{
+		Buffer[Counter] = '\0';
+		Counter--;
+	}
+	
+	return Buffer;
+}
+
+/************/
+/** TIMERS **/
+/************/
 
 public Action Timer_ChangeMap(Handle timer, any data)
 {
@@ -921,7 +1284,7 @@ public Action Timer_ReadyHud(Handle timer, any data)
 {
 	if (g_Mode == MODE_WARMUP && ReadyCount() < 10)
 	{
-		PrintHintTextToAll("%t", "Ready Hud", ReadyCount(), GetClientCount() - 1);
+		PrintHintTextToAll("%t", "Ready Hud", ReadyCount(), GetHumanClientCount());
 		return Plugin_Continue;
 	}
 	else
